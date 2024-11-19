@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>鉛直投げ上げ運動シミュレーション</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.js"></script>
+    <style>
+        .container {
+            display: flex;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            gap: 20px;
+        }
+        .left-container {
+            width: 400px;
+        }
+        .simulation {
+            width: 400px;
+            height: 600px;
+            border: 1px solid #ccc;
+            position: relative;
+            background: #f0f0f0;
+        }
+        .ball {
+            width: 20px;
+            height: 20px;
+            background: red;
+            border-radius: 50%;
+            position: absolute;
+            left: 190px;
+            transition: top 0.05s linear;
+        }
+        .chart-container {
+            flex-grow: 1;
+            height: 600px;
+            position: relative;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px;
+        }
+        .status {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            margin: 10px 0;
+        }
+        .grid-line {
+            position: absolute;
+            width: 100%;
+            border-top: 1px dashed #ccc;
+            pointer-events: none;
+        }
+        .grid-label {
+            position: absolute;
+            right: 100%;
+            transform: translateY(-50%);
+            padding-right: 5px;
+            font-size: 12px;
+            color: #666;
+        }
+        .distance-arrow {
+            position: absolute;
+            width: 2px;
+            background: blue;
+            left: 220px;
+            transform-origin: top;
+        }
+        .distance-arrow::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: -4px;
+            border-top: 8px solid blue;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+        }
+        .velocity-label {
+            position: absolute;
+            font-size: 12px;
+            color: blue;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <label>初速度 (m/s): </label>
+        <input type="number" id="initialVelocity" value="10" min="0" max="20" step="0.5">
+        <button onclick="startSimulation()">開始</button>
+        <button onclick="pauseResumeSimulation()">一時停止/再開</button>
+        <button onclick="resetSimulation()">リセット</button>
+    </div>
+    <div class="container">
+        <div class="left-container">
+            <div class="simulation" id="simulation">
+                <div class="ball" id="ball"></div>
+            </div>
+            <div class="status" id="ballStatus"></div>
+        </div>
+        <div class="chart-container">
+            <canvas id="velocityChart"></canvas>
+        </div>
+    </div>
+    <script>
+        const g = 9.8;
+        let v0;
+        let currentStep = 0;
+        const timeStep = 0.1; 
+        let isPaused = false; 
+        let simulationInterval;
+        let arrows = [];
+        let elapsedTime = 0;
+        
+        function addGridLines() {
+            const simulation = document.getElementById('simulation');
+            for (let i = 0; i <= 12; i++) {
+                const line = document.createElement('div');
+                line.className = 'grid-line';
+                line.style.top = `${i * 50}px`;
+                
+                const label = document.createElement('div');
+                label.className = 'grid-label';
+                label.textContent = `${(12 - i) * 0.5} m`;
+                
+                line.appendChild(label);
+                simulation.appendChild(line);
+            }
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('velocityChart').getContext('2d');
+            return new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{
+                        label: '0.1秒ごとの速度',
+                        data: [],
+                        backgroundColor: 'blue',
+                        pointRadius: 5
+                    }, {
+                        label: '理論値',
+                        data: [],
+                        borderColor: 'rgba(255, 99, 132, 0.5)',
+                        borderDash: [5, 5],
+                        type: 'line',
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: '時間 (s)',
+                                font: { size: 16 }
+                            },
+                            min: 0,
+                            max: 2.5,
+                            ticks: {
+                                font: { size: 14 }
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: '速度 (m/s)',
+                                font: { size: 16 }
+                            },
+                            min: -15,
+                            max: 15,
+                            ticks: {
+                                font: { size: 14 }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                font: { size: 14 }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function calculateTheoretical() {
+            let theoreticalPoints = [];
+            for (let t = 0; t <= 2.5; t += 0.01) {
+                theoreticalPoints.push({
+                    x: t,
+                    y: v0 - g * t
+                });
+            }
+            return theoreticalPoints;
+        }
+
+        function getHeight(t) {
+            return v0 * t - 0.5 * g * t * t;
+        }
+
+        function getVelocity(t) {
+            return v0 - g * t;
+        }
+
+        function addDistanceArrow(t1, t2) {
+            const h1 = getHeight(t1);
+            const h2 = getHeight(t2);
+            const v1 = getVelocity(t1);
+            const v2 = getVelocity(t2);
+            
+            const y1 = 580 - (h1 * 40);
+            const y2 = 580 - (h2 * 40);
+            const height = Math.abs(y2 - y1);
+            
+            const arrow = document.createElement('div');
+            arrow.className = 'distance-arrow';
+            arrow.style.top = `${Math.min(y1, y2)}px`;
+            arrow.style.height = `${height}px`;
+            
+            const label = document.createElement('div');
+            label.className = 'velocity-label';
+            label.style.top = `${(y1 + y2) / 2}px`;
+            
+            // Alternate left positioning based on velocity direction
+            if (v1 >= 0) {
+                label.style.left = (arrows.length % 3 === 0) ? '120px' : 
+                                   (arrows.length % 3 === 1) ? '150px' : '180px';
+            } else {
+                label.style.left = (arrows.length % 3 === 0) ? '240px' : 
+                                   (arrows.length % 3 === 1) ? '270px' : '300px';
+            }
+            
+            // Split labels vertically to prevent overlap
+            label.innerHTML = `
+                <tspan x="0" dy="0">v = ${v1.toFixed(1)} m/s</tspan>
+                <tspan x="0" dy="15">Δv = ${(v2 - v1).toFixed(1)} m/s</tspan>
+            `;
+            
+            document.getElementById('simulation').appendChild(arrow);
+            document.getElementById('simulation').appendChild(label);
+            arrows.push(arrow, label);
+            
+            // Limit number of arrows to prevent screen clutter
+            if (arrows.length > 12) {
+                const oldArrow = arrows.shift();
+                const oldLabel = arrows.shift();
+                oldArrow.remove();
+                oldLabel.remove();
+            }
+        }
+
+        function updateSimulation() {
+            const t = currentStep * timeStep;
+            const ball = document.getElementById('ball');
+            const y = getHeight(t);
+            const v = getVelocity(t);
+            const scaledY = 580 - (y * 40);
+            
+            ball.style.top = `${scaledY}px`;
+            
+            document.getElementById('ballStatus').innerHTML = `
+                時間: ${t.toFixed(1)} s<br>
+                高さ: ${y.toFixed(2)} m<br>
+                速度: ${v.toFixed(2)} m/s
+            `;
+            
+            if (currentStep > 0) {
+                addDistanceArrow((currentStep - 1) * timeStep, t);
+            }
+            
+            return scaledY <= 580 && scaledY >= 0;
+        }
+
+        function clearArrows() {
+            arrows.forEach(arrow => arrow.remove());
+            arrows = [];
+        }
+
+        let velocityChart;
+
+        function startSimulation() {
+            resetSimulation();
+            v0 = parseFloat(document.getElementById('initialVelocity').value);
+            velocityChart.data.datasets[1].data = calculateTheoretical();
+            
+            simulationInterval = setInterval(() => {
+                if (!isPaused) {
+                    const t = elapsedTime + timeStep;
+                    if (updateSimulation()) {
+                        const v = getVelocity(t - timeStep);
+                        velocityChart.data.datasets[0].data.push({x: t - timeStep, y: v});
+                        velocityChart.update();
+                        currentStep++;
+                        elapsedTime = t;
+                    } else {
+                        clearInterval(simulationInterval);
+                    }
+                }
+            }, 100);
+        }
+
+        function pauseResumeSimulation() {
+            isPaused = !isPaused;
+        }
+
+        function resetSimulation() {
+            clearInterval(simulationInterval);
+            currentStep = 0;
+            isPaused = false;
+            elapsedTime = 0;
+            clearArrows();
+            
+            const ball = document.getElementById('ball');
+            ball.style.top = '580px';
+            
+            document.getElementById('ballStatus').innerHTML = '';
+            
+            velocityChart.data.datasets[0].data = [];
+            velocityChart.data.datasets[1].data = [];
+            velocityChart.update();
+        }
+
+        window.onload = function() {
+            addGridLines();
+            velocityChart = initChart();
+        };
+    </script>
+</body>
+</html>
